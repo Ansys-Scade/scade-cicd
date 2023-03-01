@@ -1,0 +1,132 @@
+variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    # SCADE installation folder for runners
+    SCADE_DIR: "C:\\Program Files\\ANSYS Inc\\v231\\SCADE"
+    # SCADE project relative path without extension
+    SCADE_PROJECT_ROOT: "SCADE_Project_relative_path_without_extension"
+    # SCADE test project relative path without extension
+    SCADE_PROJECT_TEST_ROOT: "SCADE_Project_Test_relative_path_without_extension"
+    # SCADE test result project relative path without extension
+    SCADE_PROJECT_TEST_RESULT_ROOT: "SCADE_Project_Test_Result_relative_path_without_extension"
+    # SCADE Configurations
+    CONF_CHECK: "KCG"
+    CONF_REPORT: "RTF"
+    CONF_GEN: "KCG"
+    CONF_TEST: "Test"
+
+stages:
+    - check
+    - build
+    - tests
+    - coverage
+    - merge
+    - package
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+
+check-model:
+    stage: check
+    script:
+        - scade-cicd/scripts/CheckModel.bat %SCADE_PROJECT_ROOT%.etp %CONF_CHECK%
+    tags: [SCADE]
+    artifacts:
+        when: always
+        paths:
+            - ${SCADE_PROJECT_ROOT}.htm
+            - ${SCADE_PROJECT_ROOT}_rules.htm
+            - ${SCADE_PROJECT_ROOT}_metrics.xml
+        expire_in: 1 day
+
+report-model:
+    stage: build
+    # define a rule to run the stage only on specific branches
+    # rules:
+    #     - if: $CI_COMMIT_BRANCH == "develop"
+    #     - if: $CI_COMMIT_BRANCH == "test"
+    script:
+        - scade-cicd/scripts/ReportModel.bat %SCADE_PROJECT_ROOT%.etp %CONF_REPORT%
+    tags: [SCADE]
+    artifacts:
+        when: always
+        paths:
+            - ${SCADE_PROJECT_ROOT}.rtf
+        expire_in: 1 day
+    
+gen-code:
+    stage: build
+    # define a rule to run the stage only on specific branches
+    # rules:
+    #     - if: $CI_COMMIT_BRANCH == "develop"
+    #     - if: $CI_COMMIT_BRANCH == "test"
+    script:
+        - scade-cicd/scripts/GenerateCode.bat %SCADE_PROJECT_ROOT%.etp %CONF_GEN%
+    tags: [SCADE]
+    artifacts:
+        when: always
+        paths:
+            - ${SCADE_PROJECT_ROOT}_generated_code.zip
+        expire_in: 1 day
+
+execute-tests:
+    stage: tests
+    # define a rule to run the stage only on specific branches
+    # rules:
+    #     - if: $CI_COMMIT_BRANCH == "test"
+    script:
+        - scade-cicd/scripts/ExecuteTests.bat %SCADE_PROJECT_TEST_ROOT%.etp %SCADE_PROJECT_TEST_RESULT_ROOT%.etp %CONF_TEST%
+    tags: [SCADE]
+    artifacts:
+        when: always
+        reports:
+            junit: ${SCADE_PROJECT_TEST_RESULT_ROOT}_tee.xml
+        paths:
+            - ${SCADE_PROJECT_TEST_RESULT_ROOT}\..\Test_TEE\*.txt
+        exclude:
+            - ${SCADE_PROJECT_TEST_RESULT_ROOT}\..\Test_TEE\*_RAW.txt
+        expire_in: 1 day
+
+acquire-coverage:
+    stage: coverage
+    # define a rule to run the stage only on specific branches
+    # rules:
+    #     - if: $CI_COMMIT_BRANCH == "test"
+    script:
+        - scade-cicd/scripts/AcquireCoverage.bat %SCADE_PROJECT_TEST_ROOT%.etp %SCADE_PROJECT_TEST_RESULT_ROOT%.etp %CONF_TEST%
+    tags: [SCADE]
+    artifacts:
+        when: always
+        paths:
+            - ${SCADE_PROJECT_TEST_ROOT}_mcsummary.html
+        expire_in: 1 day
+    coverage: '/Coverage \% = (\d+.\d+)/'
+
+merge-request:
+    stage: merge
+    rules:
+        - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    script:
+        - scade-cicd/scripts/RunReportDiff.bat %SCADE_PROJECT_ROOT%.etp
+    tags: [SCADE]
+    artifacts:
+        when: always
+        expose_as: 'SCADE Model diff report'
+        paths:
+            - diff_report.html
+
+deploy-prod:
+    stage: package
+    script:
+        - scade-cicd/scripts/DeliverProject.bat %SCADE_PROJECT_ROOT%.etp %SCADE_PROJECT_TEST_ROOT%.etp
+    tags: [SCADE]
+    artifacts:
+        when: always
+        name: "$CI_PROJECT_NAME-$CI_COMMIT_REF_NAME"
+        paths:
+            - delivery\CruiseControl.zip
+        expire_in: 1 day
+    when: manual

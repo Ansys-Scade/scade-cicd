@@ -1,0 +1,116 @@
+name: GitHub CI/CD with SCADE
+
+# action runs on all push to the repository
+on: [push]
+
+# configure project settings
+env:
+  # select the SCADE version to execute actions
+  SCADE_DIR: "C:\\Program Files\\ANSYS Inc\\v231\\SCADE"
+  # SCADE project relative path without extension
+  SCADE_PROJECT_ROOT: "SCADE_Project_relative_path_without_extension"
+  # SCADE test project relative path without extension
+  SCADE_PROJECT_TEST_ROOT: "SCADE_Project_Test_relative_path_without_extension"
+  # SCADE test result project relative path without extension
+  SCADE_PROJECT_TEST_RESULT_ROOT: "SCADE_Project_Test_Result_relative_path_without_extension"
+  # SCADE Configurations
+  CONF_CHECK: KCG
+  CONF_REPORT: RTF
+  CONF_GEN: KCG
+  CONF_TEST: Test
+
+jobs:
+  check-model:
+    name: Check model
+    runs-on: [self-hosted, windows, SCADE]
+    steps:
+        - uses: actions/checkout@v3
+        - run: ./scade-cicd/scripts/CheckModel.bat "${env:SCADE_PROJECT_ROOT}.etp" "${env:CONF_CHECK}"
+        - name: Upload Rules Check
+          uses: actions/upload-artifact@v3
+          with:
+            name: Model Checks
+            path: |
+              ${{ env.SCADE_PROJECT_ROOT }}.htm
+              ${{ env.SCADE_PROJECT_ROOT }}_rules.htm
+              ${{ env.SCADE_PROJECT_ROOT }}_metrics.xml
+            if-no-files-found: error
+            retention-days: 1
+
+  report-model:
+    name: Report model
+    runs-on: [self-hosted, windows, SCADE]
+    # run this step only if the model check is successfull
+    needs: check-model
+    steps:
+        - uses: actions/checkout@v3
+        - run: ./scade-cicd/scripts/ReportModel.bat "${env:SCADE_PROJECT_ROOT}.etp" "${env:CONF_REPORT}"
+        - name: Upload Report
+          uses: actions/upload-artifact@v3
+          with:
+            name: Design Report
+            path: ${{ env.SCADE_PROJECT_ROOT }}.rtf
+            if-no-files-found: error
+            retention-days: 1
+      
+  gen-code:
+    name: Generate code
+    runs-on: [self-hosted, windows, SCADE]
+    # run this step only if the model check is successfull
+    needs: check-model
+    steps:
+        - uses: actions/checkout@v3
+        - run: ./scade-cicd/scripts/GenerateCode.bat "${env:SCADE_PROJECT_ROOT}.etp" "${env:CONF_GEN}"
+        - name: Upload Code
+          uses: actions/upload-artifact@v3
+          with:
+            name: Generated Code
+            path: ${{ env.SCADE_PROJECT_ROOT }}_generated_code.zip
+            if-no-files-found: error
+            retention-days: 1
+
+  execute-tests:
+    name: Execute tests
+    runs-on: [self-hosted, windows, SCADE]
+    # run this step only if the model check is successfull
+    needs: check-model
+    env:
+      ABS_SCADE_PROJECT_TEST_ROOT: TBD
+    steps:
+        - uses: actions/checkout@v3
+        - run: ./scade-cicd/scripts/ExecuteTests.bat "${env:SCADE_PROJECT_TEST_ROOT}.etp" "${env:SCADE_PROJECT_TEST_RESULT_ROOT}.etp" "${env:CONF_TEST}"
+        - name: workaround for relative path not supported by upload-artifact
+          run: |
+            ${ABS_SCADE_PROJECT_TEST_ROOT} = [IO.Path]::GetFullPath("${env:SCADE_PROJECT_TEST_ROOT}\..")
+            echo "ABS_SCADE_PROJECT_TEST_ROOT=${ABS_SCADE_PROJECT_TEST_ROOT}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        - name: Upload Test Report
+          uses: actions/upload-artifact@v3
+          if: always() # always run even if the previous step fails
+          with:
+            name: Test Report
+            path: |
+              ${{ env.ABS_SCADE_PROJECT_TEST_ROOT }}\Test_TEE\*.txt
+              !${{ env.ABS_SCADE_PROJECT_TEST_ROOT }}\Test_TEE\*_RAW.txt
+            if-no-files-found: error
+            retention-days: 1
+        - name: Publish Test Report
+          uses: mikepenz/action-junit-report@v3
+          if: success() || failure() # always run even if the previous step fails
+          with:
+            report_paths: '${{ env.SCADE_PROJECT_TEST_ROOT }}_tee.xml'
+
+  acquire-coverage:
+    name: Acquire coverage
+    runs-on: [self-hosted, windows, SCADE]
+    # run this step only if the test execution is successfull
+    needs: execute-tests
+    steps:
+        - uses: actions/checkout@v3
+        - run: ./scade-cicd/scripts/AcquireCoverage.bat "${env:SCADE_PROJECT_TEST_ROOT}.etp" "${env:SCADE_PROJECT_TEST_RESULT_ROOT}.etp" "${env:CONF_TEST}"
+        - name: Coverage
+          uses: actions/upload-artifact@v3
+          with:
+            name: Model & Code Coverage
+            path: ${{ env.SCADE_PROJECT_TEST_ROOT }}_mcsummary.html
+            if-no-files-found: error
+            retention-days: 1
